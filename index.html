@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#FFD100">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>VoxLab — Fábrica de Documentários</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%23FFD100'/><text x='50' y='68' font-size='52' text-anchor='middle' font-family='Arial Black'>V</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="logo"><span class="logo-chip">VOX</span>LAB</div>
+  <button class="icon-btn" id="btnSettings" title="Configurações">⚙️</button>
+</header>
+
+<main>
+  <!-- ESTILOS -->
+  <section class="card">
+    <h2>Estilo do vídeo</h2>
+    <div class="styles-grid">
+      <button class="style-card active" data-style="vox">
+        <div class="style-thumb vox-thumb">
+          <div class="vt-photo"></div><div class="vt-circle"></div><div class="vt-bar"></div>
+        </div>
+        <strong>Colagem Editorial</strong>
+        <small>Estilo Vox · papel, recortes, gráficos</small>
+      </button>
+      <button class="style-card disabled" disabled>
+        <div class="style-thumb diorama-thumb"></div>
+        <strong>Diorama de Papel</strong>
+        <small>Em breve</small>
+      </button>
+    </div>
+  </section>
+
+  <!-- BRIEFING -->
+  <section class="card">
+    <h2>Sobre o que é o vídeo?</h2>
+    <textarea id="topic" rows="2" placeholder="Ex.: O desaparecimento do voo MH370 · Por que o Pix conquistou o Brasil · O maior assalto da história"></textarea>
+    <div class="opts">
+      <label>Duração
+        <select id="optDuration">
+          <option value="30">~30 s</option>
+          <option value="60" selected>~1 min</option>
+          <option value="90">~1min30</option>
+        </select>
+      </label>
+      <label>Formato
+        <select id="optAspect">
+          <option value="9:16" selected>9:16 vertical</option>
+          <option value="16:9">16:9 YouTube</option>
+        </select>
+      </label>
+      <label>Voz
+        <select id="optVoice">
+          <option value="Charon" selected>Grave (Charon)</option>
+          <option value="Kore">Firme (Kore)</option>
+          <option value="Enceladus">Sussurro (Enceladus)</option>
+          <option value="Puck">Animada (Puck)</option>
+          <option value="none">Sem narração</option>
+        </select>
+      </label>
+      <label class="toggle-label">Imagens IA
+        <input type="checkbox" id="optAiImages">
+        <span class="hint">liga = Gemini gera as imagens · desliga = fotos históricas reais (Wikimedia)</span>
+      </label>
+    </div>
+    <button class="cta" id="btnGenerate">🎬 Gerar vídeo</button>
+  </section>
+
+  <!-- PROGRESSO -->
+  <section class="card hidden" id="progressCard">
+    <div class="phases">
+      <div class="phase" data-phase="research"><span class="ph-dot"></span>Pesquisa</div>
+      <div class="phase" data-phase="script"><span class="ph-dot"></span>Roteiro</div>
+      <div class="phase" data-phase="images"><span class="ph-dot"></span>Imagens</div>
+      <div class="phase" data-phase="voice"><span class="ph-dot"></span>Narração</div>
+      <div class="phase" data-phase="render"><span class="ph-dot"></span>Render</div>
+    </div>
+    <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+    <p class="progress-msg" id="progressMsg">Preparando…</p>
+    <div class="canvas-wrap" id="canvasWrap">
+      <canvas id="stage"></canvas>
+    </div>
+  </section>
+
+  <!-- RESULTADO -->
+  <section class="card hidden" id="resultCard">
+    <h2>✅ Seu vídeo está pronto</h2>
+    <video id="resultVideo" controls playsinline></video>
+    <div class="result-actions">
+      <a class="cta" id="btnDownload" download>⬇️ Baixar vídeo</a>
+      <button class="cta secondary" id="btnScriptToggle">📝 Ver roteiro</button>
+      <button class="cta secondary" id="btnAgain">🔁 Novo vídeo</button>
+    </div>
+    <div class="script-view hidden" id="scriptView"></div>
+  </section>
+</main>
+
+<!-- SETTINGS -->
+<div class="modal hidden" id="settingsModal">
+  <div class="modal-box">
+    <h2>Configurações</h2>
+    <label class="field">Chave da API Gemini (grátis)
+      <input type="password" id="inpKey" placeholder="AIza...">
+    </label>
+    <p class="hint">Pegue a sua grátis em <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> — a chave fica salva só neste aparelho.</p>
+    <div class="result-actions">
+      <button class="cta" id="btnSaveKey">Salvar</button>
+      <button class="cta secondary" id="btnCloseSettings">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
