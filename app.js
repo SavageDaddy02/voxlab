@@ -136,6 +136,18 @@ async function gemImage(prompt) {
   return 'data:' + part.inlineData.mimeType + ';base64,' + part.inlineData.data;
 }
 
+// ElevenLabs como voz reserva (free tier próprio, independente do Gemini)
+async function elevenTTS(text) {
+  const voiceId = 'onwK4e9ZLuTAKqWW03F9'; // Daniel — grave, tom documentário
+  const res = await fetch('https://api.elevenlabs.io/v1/text-to-speech/' + voiceId + '?output_format=mp3_44100_128', {
+    method: 'POST',
+    headers: { 'xi-api-key': settings.elKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, model_id: 'eleven_multilingual_v2' })
+  });
+  if (!res.ok) { const e = new Error('ElevenLabs ' + res.status); e.status = res.status; throw e; }
+  return res.arrayBuffer();
+}
+
 function b64ToBytes(b64) {
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
@@ -277,6 +289,26 @@ function makeHalftoneTile(color, dot = 2.2, gap = 11) {
   return c;
 }
 
+// aleatório determinístico (bordas rasgadas estáveis entre frames)
+function seededRand(seed) {
+  let s = (seed * 9301 + 49297) % 233280;
+  return () => { s = (s * 9301 + 49297) % 233280; return s / 233280; };
+}
+// retângulo com borda irregular de papel rasgado
+function tornRectPath(ctx, x, y, w, h, seed, jag = 0.12) {
+  const r = seededRand(seed);
+  const j = jag * Math.min(w, h) * 0.5;
+  const step = Math.max(12, Math.min(w, h) / 7);
+  const pts = [];
+  for (let px = x; px < x + w; px += step) pts.push([px, y + (r() - 0.5) * j]);
+  for (let py = y; py < y + h; py += step) pts.push([x + w + (r() - 0.5) * j, py]);
+  for (let px = x + w; px > x; px -= step) pts.push([px, y + h + (r() - 0.5) * j]);
+  for (let py = y + h; py > y; py -= step) pts.push([x + (r() - 0.5) * j, py]);
+  ctx.beginPath();
+  pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+  ctx.closePath();
+}
+
 class VoxRenderer {
   constructor(canvas, project, timeline, assets) {
     this.cv = canvas; this.ctx = canvas.getContext('2d');
@@ -289,6 +321,48 @@ class VoxRenderer {
     this.u = Math.min(this.W, this.H) / 720; // unidade de escala
   }
   font(px, black = true) { return `${black ? '' : '600 '}${Math.round(px)}px ${black ? '"Archivo Black"' : 'Inter'}, sans-serif`; }
+
+  // painel de papel colado com borda rasgada e sombra
+  paperPanel(cx, cy, w, h, rot, color, seed, jag = 0.06) {
+    const { ctx, u } = this;
+    ctx.save();
+    ctx.translate(cx, cy); ctx.rotate(rot);
+    ctx.shadowColor = 'rgba(0,0,0,.28)'; ctx.shadowBlur = 18 * u; ctx.shadowOffsetY = 8 * u;
+    tornRectPath(ctx, -w / 2, -h / 2, w, h, seed, jag);
+    ctx.fillStyle = color; ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = ctx.createPattern(this.noise, 'repeat');
+    ctx.fill();
+    ctx.restore();
+  }
+  // seta desenhada à mão (com tremor) + ponta
+  handArrow(x1, y1, x2, y2, prog, color = PAL.ink) {
+    if (prog <= 0) return;
+    const { ctx, u } = this;
+    const cx = (x1 + x2) / 2 + (y2 - y1) * 0.25, cy = (y1 + y2) / 2 - (x2 - x1) * 0.25;
+    ctx.save();
+    ctx.strokeStyle = color; ctx.lineWidth = 6 * u; ctx.lineCap = 'round';
+    ctx.beginPath();
+    const n = 24, end = Math.floor(n * easeOutCubic(prog));
+    for (let i = 0; i <= end; i++) {
+      const s = i / n;
+      const x = (1 - s) * (1 - s) * x1 + 2 * (1 - s) * s * cx + s * s * x2 + Math.sin(s * 18) * 1.5 * u;
+      const y = (1 - s) * (1 - s) * y1 + 2 * (1 - s) * s * cy + s * s * y2 + Math.cos(s * 15) * 1.5 * u;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    if (prog > 0.92) {
+      const a = Math.atan2(y2 - cy, x2 - cx);
+      ctx.beginPath();
+      ctx.moveTo(x2, y2);
+      ctx.lineTo(x2 - 16 * u * Math.cos(a - 0.45), y2 - 16 * u * Math.sin(a - 0.45));
+      ctx.moveTo(x2, y2);
+      ctx.lineTo(x2 - 16 * u * Math.cos(a + 0.45), y2 - 16 * u * Math.sin(a + 0.45));
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
 
   draw(t) {
     const { ctx, W, H } = this;
@@ -303,14 +377,17 @@ class VoxRenderer {
     if (blk.kind === 'endcard') { this.endcard(tb, blk.dur); this.progressBar(t / total); return; }
 
     const scene = blk.block.scene;
-    const bg = FIELD_BG[scene.colorField];
-    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+    // base: papel envelhecido SEMPRE — o "color field" é um painel de papel colado por cima
+    ctx.fillStyle = '#E9DFC8'; ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = ctx.createPattern(this.noise, 'repeat'); ctx.fillRect(0, 0, W, H);
+    const bg = FIELD_BG[scene.colorField];
+    this.paperPanel(W / 2, H / 2, W * 0.95, H * 0.95, 0.004 * (blk.index % 2 ? 1 : -1),
+      scene.colorField === 'paper' ? '#F6F0E2' : bg, blk.index * 7 + 3, 0.03);
     // patch de halftone no canto
     ctx.save();
-    ctx.globalAlpha = 0.9;
+    ctx.globalAlpha = 0.85;
     ctx.fillStyle = ctx.createPattern(scene.colorField === 'navy' ? this.htPaper : this.htInk, 'repeat');
-    ctx.beginPath(); ctx.arc(W * 0.92, H * 0.1, Math.min(W, H) * 0.3, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.arc(W * 0.9, H * 0.1, Math.min(W, H) * 0.26, 0, 7); ctx.fill();
     ctx.restore();
 
     // "impact" de entrada do bloco: leve overshoot global
@@ -324,6 +401,10 @@ class VoxRenderer {
 
     this.subtitles(blk, p);
     this.labelChip(scene, tb);
+    // vinheta cinematográfica
+    const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.45, W / 2, H / 2, Math.max(W, H) * 0.72);
+    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(35,22,8,0.2)');
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
     this.progressBar(t / total);
   }
 
@@ -352,43 +433,58 @@ class VoxRenderer {
     ctx.restore();
   }
 
+  // legendas estilo Vox: palavra por palavra sincronizada, com marca-texto na palavra atual
   subtitles(blk, p) {
     const narr = blk.block.narration || '';
     if (!narr) return;
     const { ctx, W, H, u } = this;
     const words = narr.split(/\s+/);
-    const per = 7;
-    const chunks = [];
-    for (let i = 0; i < words.length; i += per) chunks.push(words.slice(i, i + per).join(' '));
-    const idx = Math.min(chunks.length - 1, Math.floor(p * chunks.length));
-    const text = chunks[idx];
-    const fs = 30 * u;
+    // timing por palavra proporcional ao comprimento (sincroniza com a fala)
+    if (!blk._wt) {
+      const weights = words.map(w => w.length + 2);
+      const tot = weights.reduce((a, b) => a + b, 0);
+      let acc = 0;
+      blk._wt = weights.map(w => { const st = acc / tot; acc += w; return st; });
+    }
+    const lead = 0.03, span = 0.9;
+    let cur = -1;
+    for (let i = 0; i < words.length; i++) if (p >= lead + blk._wt[i] * span) cur = i;
+    if (cur < 0) cur = 0;
+    const per = 6;
+    const li = Math.floor(cur / per);
+    const lineWords = words.slice(li * per, li * per + per);
+    const curInLine = cur - li * per;
+    let fs = 34 * u;
     ctx.font = this.font(fs);
-    // quebra em linhas
-    const maxW = W * 0.86;
-    const lines = [];
-    let line = '';
-    for (const w of text.split(' ')) {
-      const t2 = line ? line + ' ' + w : w;
-      if (ctx.measureText(t2).width > maxW && line) { lines.push(line); line = w; }
-      else line = t2;
+    const gaps = 11 * u;
+    let widths = lineWords.map(w => ctx.measureText(w).width);
+    let totW = widths.reduce((a, b) => a + b, 0) + gaps * (lineWords.length - 1);
+    while (totW > W * 0.88 && fs > 16 * u) {
+      fs *= 0.93; ctx.font = this.font(fs);
+      widths = lineWords.map(w => ctx.measureText(w).width);
+      totW = widths.reduce((a, b) => a + b, 0) + gaps * (lineWords.length - 1);
     }
-    if (line) lines.push(line);
-    const lh = fs * 1.5;
-    let y = H * (this.vert ? 0.84 : 0.86) - (lines.length - 1) * lh;
-    const enter = easeOutCubic(seg(p * chunks.length - idx, 0, 0.18));
-    for (const ln of lines) {
-      const tw = ctx.measureText(ln).width;
-      ctx.save();
-      ctx.globalAlpha = enter;
-      ctx.translate(W / 2, y + (1 - enter) * 14 * u);
-      ctx.fillStyle = PAL.ink;
-      ctx.fillRect(-tw / 2 - 14 * u, -fs * 0.78, tw + 28 * u, fs * 1.42);
-      ctx.fillStyle = PAL.white; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(ln, 0, 0);
-      ctx.restore();
-      y += lh;
-    }
+    const y = H * (this.vert ? 0.85 : 0.87);
+    ctx.save();
+    ctx.translate(W / 2, y);
+    ctx.rotate(-0.006);
+    // tira de papel atrás da legenda
+    ctx.shadowColor = 'rgba(0,0,0,.3)'; ctx.shadowBlur = 14 * u; ctx.shadowOffsetY = 6 * u;
+    tornRectPath(ctx, -totW / 2 - 22 * u, -fs * 0.9, totW + 44 * u, fs * 1.7, blk.index * 31 + li, 0.2);
+    ctx.fillStyle = '#FBF6EA'; ctx.fill();
+    ctx.shadowColor = 'transparent';
+    let x = -totW / 2;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    lineWords.forEach((w, i) => {
+      if (i === curInLine) {
+        ctx.fillStyle = PAL.yellow;
+        ctx.fillRect(x - 5 * u, -fs * 0.66, widths[i] + 10 * u, fs * 1.22);
+      }
+      ctx.fillStyle = i <= curInLine ? PAL.ink : 'rgba(20,24,31,0.25)';
+      ctx.fillText(w, x, 0);
+      x += widths[i] + gaps;
+    });
+    ctx.restore();
   }
 
   tape(x, y, w, h, rot) {
@@ -430,57 +526,64 @@ class VoxRenderer {
     ctx.restore();
   }
 
-  /* ---- CENA: FOTO DE ARQUIVO ---- */
+  /* ---- CENA: FOTO DE ARQUIVO (recorte de papel) ---- */
   scene_photo(blk, tb, p) {
     const { ctx, W, H, u } = this;
     const img = this.assets[blk.index];
-    const enter = easeOutBack(seg(tb, 0.05, 0.6));
-    const zoom = 1 + 0.07 * p;
-    const fw = Math.min(W * 0.8, H * 0.62);
-    const fh = fw * 0.78;
+    const enter = easeOutBack(seg(tb, 0.05, 0.55));
+    const zoom = 1 + 0.06 * p;
+    const iw = Math.min(W * 0.74, H * 0.52);
+    const ih = iw * 0.75;
+    const pad = iw * 0.055;
     const bx = W / 2 + (1 - enter) * W * 0.9;
-    const by = H * (this.vert ? 0.42 : 0.46);
+    const by = H * (this.vert ? 0.4 : 0.44);
     ctx.save();
-    ctx.translate(bx, by); ctx.rotate(-0.045); ctx.scale(zoom, zoom);
-    // sombra + moldura polaroid
-    ctx.shadowColor = 'rgba(0,0,0,.35)'; ctx.shadowBlur = 26 * u; ctx.shadowOffsetY = 12 * u;
-    ctx.fillStyle = '#fff';
-    const bord = fw * 0.045;
-    ctx.fillRect(-fw / 2, -fh / 2, fw, fh + bord * 2.2);
+    ctx.translate(bx, by); ctx.rotate(-0.05); ctx.scale(zoom, zoom);
+    // recorte branco com borda irregular de papel rasgado
+    ctx.shadowColor = 'rgba(0,0,0,.42)'; ctx.shadowBlur = 24 * u; ctx.shadowOffsetY = 14 * u;
+    tornRectPath(ctx, -iw / 2 - pad, -ih / 2 - pad, iw + pad * 2, ih + pad * 2, blk.index * 17 + 1, 0.14);
+    ctx.fillStyle = '#FFFFFF'; ctx.fill();
     ctx.shadowColor = 'transparent';
-    // imagem (crop cover)
-    const iw = fw - bord * 2, ih = fh - bord * 2;
     if (img) {
+      ctx.save();
+      tornRectPath(ctx, -iw / 2, -ih / 2, iw, ih, blk.index * 17 + 2, 0.05);
+      ctx.clip();
       const r = Math.max(iw / img.width, ih / img.height);
       const sw = iw / r, sh = ih / r;
-      ctx.save();
-      ctx.beginPath(); ctx.rect(-iw / 2, -fh / 2 + bord, iw, ih); ctx.clip();
-      ctx.filter = 'saturate(0.75) contrast(1.05)';
-      ctx.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, -iw / 2, -fh / 2 + bord, iw, ih);
+      ctx.filter = 'saturate(0.65) contrast(1.08) sepia(0.12)';
+      ctx.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, -iw / 2, -ih / 2, iw, ih);
       ctx.filter = 'none';
+      // meio-tom por cima: aparência de impressão de jornal
+      ctx.globalAlpha = 0.16;
+      ctx.fillStyle = ctx.createPattern(this.htInk, 'repeat');
+      ctx.fillRect(-iw / 2, -ih / 2, iw, ih);
       ctx.restore();
     } else {
-      ctx.fillStyle = PAL.paper2; ctx.fillRect(-iw / 2, -fh / 2 + bord, iw, ih);
+      tornRectPath(ctx, -iw / 2, -ih / 2, iw, ih, blk.index * 17 + 2, 0.05);
+      ctx.fillStyle = PAL.paper2; ctx.fill();
       ctx.font = this.font(ih * 0.4); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(blk.block.scene.stack?.emoji || '🗞️', 0, -fh / 2 + bord + ih / 2);
+      ctx.fillText(blk.block.scene.stack?.emoji || '🗞️', 0, 0);
     }
-    // fitas
-    const ta = easeOutBack(seg(tb, 0.55, 0.85));
+    // fitas adesivas nos cantos
+    const ta = easeOutBack(seg(tb, 0.5, 0.8));
     if (ta > 0) {
       ctx.save(); ctx.globalAlpha = ta;
-      this.tape(-fw / 2 + bord, -fh / 2 + bord * 0.4, fw * 0.22, fw * 0.055, -0.5);
-      this.tape(fw / 2 - bord, -fh / 2 + bord * 0.4, fw * 0.22, fw * 0.055, 0.55);
+      this.tape(-iw / 2, -ih / 2, iw * 0.26, iw * 0.06, -0.55);
+      this.tape(iw / 2, -ih / 2, iw * 0.26, iw * 0.06, 0.5);
       ctx.restore();
     }
     ctx.restore();
     // alfinete cai
-    const ps = seg(tb, 0.4, 0.62);
+    const ps = seg(tb, 0.38, 0.6);
     if (ps > 0) {
       const drop = easeOutBack(ps);
-      this.pin(bx, by - fh / 2 * zoom + (1 - drop) * -H * 0.2, drop * 1.35 * u);
+      this.pin(bx, by - (ih / 2 + pad) * zoom + (1 - drop) * -H * 0.2, drop * 1.35 * u);
     }
+    // seta desenhada à mão do rótulo até a foto
+    this.handArrow(W * 0.2, H * 0.14, bx - iw * 0.28, by - ih * 0.42, seg(tb, 0.45, 0.72),
+      blk.block.scene.colorField === 'navy' ? PAL.paper : PAL.ink);
     // círculo de marcador
-    this.markerEllipse(bx, by, fw * 0.58, fh * 0.58, seg(p, 0.55, 0.85),
+    this.markerEllipse(bx, by, iw * 0.6, ih * 0.62, seg(p, 0.58, 0.85),
       blk.block.scene.colorField === 'coral' ? PAL.ink : PAL.coral);
   }
 
@@ -659,8 +762,9 @@ class VoxRenderer {
   /* ---- ENDCARD ---- */
   endcard(tb, dur) {
     const { ctx, W, H, u } = this;
-    ctx.fillStyle = PAL.navy; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#E9DFC8'; ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = ctx.createPattern(this.noise, 'repeat'); ctx.fillRect(0, 0, W, H);
+    this.paperPanel(W / 2, H / 2, W * 0.92, H * 0.62, -0.01, PAL.navy, 991, 0.06);
     const a = easeOutBack(seg(tb, 0.05, 0.5));
     ctx.save();
     ctx.translate(W / 2, H * 0.44); ctx.scale(a, a);
@@ -787,20 +891,25 @@ async function generate() {
   const useAI = $('#optAiImages').checked;
 
   try {
-    /* 1 — pesquisa */
-    setPhase('research'); setProgress(4, 'Pesquisando fatos na web…');
-    let research = '';
-    try {
-      research = await gemText(
-        `Pesquise fatos verificáveis sobre: "${topic}". Liste em tópicos: números-chave, datas, lugares, nomes, uma virada contraintuitiva e comparações concretas. Seja factual e denso. Responda em português.`,
-        { search: true }
-      );
-    } catch (e) { console.warn('pesquisa falhou', e); }
-    donePhase('research');
+    /* 1 — pesquisa + 2 — roteiro (ou projeto externo injetado p/ testes) */
+    let project;
+    if (window.__extProject) {
+      project = window.__extProject;
+      donePhase('research'); donePhase('script');
+    } else {
+      setPhase('research'); setProgress(4, 'Pesquisando fatos na web…');
+      let research = '';
+      try {
+        research = await gemText(
+          `Pesquise fatos verificáveis sobre: "${topic}". Liste em tópicos: números-chave, datas, lugares, nomes, uma virada contraintuitiva e comparações concretas. Seja factual e denso. Responda em português.`,
+          { search: true }
+        );
+      } catch (e) { console.warn('pesquisa falhou', e); }
+      donePhase('research');
 
-    /* 2 — roteiro */
-    setPhase('script'); setProgress(14, 'Escrevendo o roteiro estilo Vox…');
-    const project = await makeScript(topic, seconds, research);
+      setPhase('script'); setProgress(14, 'Escrevendo o roteiro estilo Vox…');
+      project = await makeScript(topic, seconds, research);
+    }
     lastProject = project;
     donePhase('script');
 
@@ -835,25 +944,43 @@ async function generate() {
     setPhase('voice');
     const actxTmp = new (window.AudioContext || window.webkitAudioContext)();
     const voiceBuffers = {};
-    if (voice !== 'none') {
+    if (window.__extVoice) {
+      // áudios externos injetados (testes/integrações)
+      for (let i = 0; i < project.blocks.length; i++) {
+        const url = window.__extVoice[i];
+        if (!url) continue;
+        setProgress(45 + (i / project.blocks.length) * 18, `Narração ${i + 1}/${project.blocks.length}…`);
+        try {
+          const ab = await fetch(url.startsWith('http') ? '/proxy?url=' + encodeURIComponent(url) : url).then(r => r.arrayBuffer());
+          voiceBuffers[i] = await actxTmp.decodeAudioData(ab);
+        } catch (e) { console.warn('voz externa falhou bloco ' + i, e); }
+      }
+    } else if (voice !== 'none') {
       let quotaRetries = 0;
+      let engine = 'gemini';
       for (let i = 0; i < project.blocks.length; i++) {
         setProgress(45 + (i / project.blocks.length) * 18, `Narração ${i + 1}/${project.blocks.length}…`);
         const line = project.blocks[i].narration;
         try {
-          const { bytes, rate } = await gemTTS(
-            'Narre como documentarista, tom grave, calmo e envolvente, em português do Brasil: ' + line,
-            voice
-          );
-          voiceBuffers[i] = pcmToAudioBuffer(actxTmp, bytes, rate);
+          if (engine === 'eleven') {
+            voiceBuffers[i] = await actxTmp.decodeAudioData(await elevenTTS(line));
+          } else {
+            const { bytes, rate } = await gemTTS(
+              'Narre como documentarista, tom grave, calmo e envolvente, em português do Brasil: ' + line,
+              voice
+            );
+            voiceBuffers[i] = pcmToAudioBuffer(actxTmp, bytes, rate);
+          }
         } catch (e) {
           console.warn('TTS falhou bloco ' + i, e);
-          if (e.status === 429) {
-            // no máx. 2 esperas; se a cota diária acabou, segue sem narração
+          if (e.status === 429 && engine === 'gemini') {
+            // no máx. 2 esperas; depois tenta ElevenLabs; por fim segue sem voz
             if (quotaRetries < 2) { quotaRetries++; setProgress(null, 'Limite de voz atingido, aguardando 25s…'); await sleep(25000); i--; continue; }
+            if (settings.elKey) { engine = 'eleven'; toast('Voz do Gemini esgotada — usando ElevenLabs de reserva.', 5000); i--; continue; }
             toast('⚠️ Cota diária de voz esgotada — o vídeo sairá sem narração (renova amanhã).', 7000);
             break;
           }
+          if (engine === 'eleven') { toast('⚠️ ElevenLabs falhou — seguindo sem narração.', 6000); break; }
         }
         await sleep(400);
       }
@@ -971,10 +1098,12 @@ function escapeHtml(s) { const d = document.createElement('div'); d.textContent 
 /* ---------- Settings ---------- */
 function openSettings() {
   $('#inpKey').value = settings.key || '';
+  $('#inpElKey').value = settings.elKey || '';
   $('#settingsModal').classList.remove('hidden');
 }
 function saveSettings() {
   settings.key = $('#inpKey').value.trim();
+  settings.elKey = $('#inpElKey').value.trim();
   localStorage.setItem(LS, JSON.stringify(settings));
   $('#settingsModal').classList.add('hidden');
   toast(settings.key ? '🔑 Chave salva!' : 'Chave removida');
