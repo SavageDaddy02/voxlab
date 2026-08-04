@@ -466,10 +466,12 @@ class VoxRenderer {
     ctx.beginPath(); ctx.arc(W * 0.9, H * 0.1, Math.min(W, H) * 0.26, 0, 7); ctx.fill();
     ctx.restore();
 
-    // "impact" de entrada do bloco: leve overshoot global
+    // "impact" de entrada do bloco + deriva contínua de câmera (nada fica parado)
     const imp = 1 + 0.05 * (1 - easeOutCubic(seg(tb, 0, 0.3)));
+    const drift = 2.2 * this.u;
     ctx.save();
-    ctx.translate(W / 2, H / 2); ctx.scale(imp, imp); ctx.translate(-W / 2, -H / 2);
+    ctx.translate(W / 2, H / 2); ctx.scale(imp * (1 + 0.012 * Math.sin(t * 0.35)), imp * (1 + 0.012 * Math.sin(t * 0.35))); ctx.translate(-W / 2, -H / 2);
+    ctx.translate(Math.sin(t * 0.6) * drift, Math.cos(t * 0.8) * drift);
 
     const draw = this['scene_' + scene.type] || this.scene_headline;
     draw.call(this, blk, tb, p);
@@ -1161,8 +1163,8 @@ async function generate() {
         if (tt >= timeline.total + 0.3) { finished = true; clearInterval(iv); resolve(); return; }
         requestAnimationFrame(step);
       };
-      // timer de segurança: continua mesmo se o rAF for pausado pelo navegador
-      const iv = setInterval(step, 100);
+      // timer de segurança a ~30fps: mantém o vídeo fluido mesmo se o rAF for pausado
+      const iv = setInterval(step, 33);
       requestAnimationFrame(step);
     });
 
