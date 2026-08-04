@@ -48,7 +48,7 @@ function resetPhases() {
   document.querySelectorAll('.phase').forEach(el => el.classList.remove('active', 'done'));
 }
 function setProgress(pct, msg) {
-  $('#progressFill').style.width = Math.min(100, pct) + '%';
+  if (pct != null) $('#progressFill').style.width = Math.min(100, pct) + '%';
   if (msg) $('#progressMsg').textContent = msg;
 }
 
@@ -836,6 +836,7 @@ async function generate() {
     const actxTmp = new (window.AudioContext || window.webkitAudioContext)();
     const voiceBuffers = {};
     if (voice !== 'none') {
+      let quotaRetries = 0;
       for (let i = 0; i < project.blocks.length; i++) {
         setProgress(45 + (i / project.blocks.length) * 18, `Narração ${i + 1}/${project.blocks.length}…`);
         const line = project.blocks[i].narration;
@@ -847,7 +848,12 @@ async function generate() {
           voiceBuffers[i] = pcmToAudioBuffer(actxTmp, bytes, rate);
         } catch (e) {
           console.warn('TTS falhou bloco ' + i, e);
-          if (e.status === 429) { setProgress(null, 'Limite de voz atingido, aguardando 20s…'); await sleep(20000); i--; continue; }
+          if (e.status === 429) {
+            // no máx. 2 esperas; se a cota diária acabou, segue sem narração
+            if (quotaRetries < 2) { quotaRetries++; setProgress(null, 'Limite de voz atingido, aguardando 25s…'); await sleep(25000); i--; continue; }
+            toast('⚠️ Cota diária de voz esgotada — o vídeo sairá sem narração (renova amanhã).', 7000);
+            break;
+          }
         }
         await sleep(400);
       }
