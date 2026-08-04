@@ -8,10 +8,10 @@
 /* ---------- Config ---------- */
 const PAL = {
   paper: '#F4EEE1', paper2: '#E9E0CC', yellow: '#FFD100', navy: '#12294B',
-  coral: '#FF5A45', ink: '#14181F', white: '#FFFFFF'
+  coral: '#FF5A45', red: '#A6242B', ink: '#14181F', white: '#FFFFFF'
 };
-const FIELD_BG = { yellow: PAL.yellow, paper: PAL.paper, navy: PAL.navy, coral: PAL.coral };
-const FIELD_FG = { yellow: PAL.ink, paper: PAL.ink, navy: PAL.paper, coral: PAL.paper };
+const FIELD_BG = { yellow: PAL.yellow, paper: PAL.paper, navy: PAL.navy, coral: PAL.coral, red: PAL.red };
+const FIELD_FG = { yellow: PAL.ink, paper: PAL.ink, navy: PAL.paper, coral: PAL.paper, red: PAL.paper };
 const GEM = 'https://generativelanguage.googleapis.com/v1beta/models/';
 const LS = 'voxlab_settings_v1';
 
@@ -225,8 +225,12 @@ Responda SÓ com JSON válido neste formato exato:
    "narration": "texto falado do bloco",
    "scene": {
     "type": "photo|headline|chart|route|stack",
-    "colorField": "yellow|paper|navy|coral",
+    "colorField": "yellow|paper|navy|coral|red",
     "label": "etiqueta curta da cena (2-4 palavras, MAIÚSCULAS)",
+    "caption": "legenda datilografada curta sob a foto (3-6 palavras, para photo)",
+    "notes": ["2 a 3 itens curtos de anotação de campo (2-3 palavras cada)"],
+    "notesTitle": "título do cartão de notas (1-2 palavras MAIÚSCULAS)",
+    "stamp": "carimbo de 1-2 palavras tipo CONFIDENCIAL/URGENTE (use com moderação, 1-2 cenas)",
     "imageQuery": "busca em INGLÊS para foto de arquivo real (2-5 palavras, só para type photo)",
     "imageQueryAlt": "busca alternativa em inglês",
     "imagePrompt": "descrição em inglês da imagem para IA gerar (só para type photo)",
@@ -238,7 +242,8 @@ Responda SÓ com JSON válido neste formato exato:
   }
  ]
 }
-Use "colorField" variado (navy para momentos tensos, yellow/paper para dados, coral no máximo 1 vez).`;
+Use "colorField" variado (navy/red para momentos tensos ou dramáticos, yellow/paper para dados, coral no máximo 1 vez; red combina com histórias de guerra, crime e mistério).
+As cenas devem ser COLAGENS DENSAS: cenas photo/route quase sempre levam "caption" e "notes"; use "stamp" nas 1-2 cenas mais dramáticas.`;
   const raw = await gemText(prompt, { json: true });
   let obj;
   try { obj = JSON.parse(raw); }
@@ -334,6 +339,77 @@ class VoxRenderer {
     ctx.globalAlpha = 0.5;
     ctx.fillStyle = ctx.createPattern(this.noise, 'repeat');
     ctx.fill();
+    ctx.restore();
+  }
+  // carimbo vermelho tipo "CLASSIFIED" que bate na tela
+  stamp(text, x, y, rot, prog, color = PAL.red) {
+    if (prog <= 0) return;
+    const { ctx, u } = this;
+    const a = easeOutCubic(Math.min(1, prog * 1.6));
+    ctx.save();
+    ctx.translate(x, y); ctx.rotate(rot);
+    ctx.scale(1.7 - 0.7 * a, 1.7 - 0.7 * a);
+    ctx.globalAlpha = 0.88 * a;
+    ctx.font = this.font(30 * u);
+    const w = ctx.measureText(text).width + 34 * u;
+    ctx.strokeStyle = color; ctx.lineWidth = 5 * u;
+    ctx.strokeRect(-w / 2, -27 * u, w, 54 * u);
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(text, 0, 0);
+    // desgaste de tinta do carimbo
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = ctx.createPattern(this.noise, 'repeat');
+    ctx.fillRect(-w / 2, -27 * u, w, 54 * u);
+    ctx.restore();
+  }
+  // cartão de anotações de campo com checkmarks
+  notesCard(cx, cy, w, title, items, prog, seed) {
+    if (prog <= 0 || !items.length) return;
+    const { ctx, u } = this;
+    const a = easeOutBack(Math.min(1, prog * 1.4));
+    const lh = 27 * u;
+    const h = 52 * u + items.length * lh;
+    ctx.save();
+    ctx.translate(cx, cy + (1 - a) * 30 * u); ctx.rotate(-0.03);
+    ctx.globalAlpha = Math.min(1, a);
+    ctx.shadowColor = 'rgba(0,0,0,.32)'; ctx.shadowBlur = 12 * u; ctx.shadowOffsetY = 6 * u;
+    tornRectPath(ctx, -w / 2, -h / 2, w, h, seed, 0.14);
+    ctx.fillStyle = '#FBF4E4'; ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.font = this.font(19 * u);
+    ctx.fillStyle = PAL.ink;
+    ctx.fillText(title, -w / 2 + 15 * u, -h / 2 + 26 * u);
+    ctx.fillStyle = PAL.red;
+    ctx.fillRect(-w / 2 + 15 * u, -h / 2 + 40 * u, w * 0.45, 3.5 * u);
+    ctx.font = this.font(16.5 * u, false);
+    items.forEach((it, i) => {
+      const ia = seg(prog, 0.25 + i * 0.14, 0.5 + i * 0.14);
+      if (ia <= 0) return;
+      ctx.fillStyle = PAL.red;
+      ctx.fillText('✓', -w / 2 + 15 * u, -h / 2 + 62 * u + i * lh);
+      ctx.fillStyle = PAL.ink;
+      ctx.fillText(String(it).slice(0, 24), -w / 2 + 34 * u, -h / 2 + 62 * u + i * lh);
+    });
+    ctx.restore();
+  }
+  // tira de legenda datilografada sob fotos
+  captionStrip(text, cx, cy, prog, seed) {
+    if (prog <= 0 || !text) return;
+    const { ctx, u } = this;
+    const a = easeOutCubic(prog);
+    ctx.save();
+    ctx.translate(cx, cy); ctx.rotate(0.015); ctx.globalAlpha = a;
+    ctx.font = this.font(18 * u);
+    const w = Math.min(ctx.measureText(text).width + 26 * u, this.W * 0.8);
+    ctx.shadowColor = 'rgba(0,0,0,.28)'; ctx.shadowBlur = 8 * u; ctx.shadowOffsetY = 4 * u;
+    tornRectPath(ctx, -w / 2, -17 * u, w, 34 * u, seed, 0.3);
+    ctx.fillStyle = '#FBF4E4'; ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.fillStyle = PAL.ink; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(text, 0, 0);
     ctx.restore();
   }
   // seta desenhada à mão (com tremor) + ponta
@@ -580,11 +656,18 @@ class VoxRenderer {
       this.pin(bx, by - (ih / 2 + pad) * zoom + (1 - drop) * -H * 0.2, drop * 1.35 * u);
     }
     // seta desenhada à mão do rótulo até a foto
+    const darkBg = ['navy', 'red'].includes(blk.block.scene.colorField);
     this.handArrow(W * 0.2, H * 0.14, bx - iw * 0.28, by - ih * 0.42, seg(tb, 0.45, 0.72),
-      blk.block.scene.colorField === 'navy' ? PAL.paper : PAL.ink);
+      darkBg ? PAL.paper : PAL.ink);
     // círculo de marcador
     this.markerEllipse(bx, by, iw * 0.6, ih * 0.62, seg(p, 0.58, 0.85),
-      blk.block.scene.colorField === 'coral' ? PAL.ink : PAL.coral);
+      ['coral', 'red'].includes(blk.block.scene.colorField) ? PAL.yellow : PAL.coral);
+    // camadas extras da colagem: legenda datilografada, anotações de campo e carimbo
+    const s = blk.block.scene;
+    this.captionStrip((s.caption || '').toUpperCase(), bx + W * 0.03, by + (ih / 2 + pad) * zoom + 26 * u, seg(tb, 0.5, 0.75), blk.index * 41 + 7);
+    if (s.notes && s.notes.length) this.notesCard(W * 0.26, H * (this.vert ? 0.69 : 0.72), W * 0.42, s.notesTitle || 'ANOTAÇÕES', s.notes.slice(0, 3), seg(tb, 0.55, 0.95), blk.index * 43 + 9);
+    if (s.stamp) this.stamp(String(s.stamp).toUpperCase().slice(0, 14), W * 0.74, H * (this.vert ? 0.7 : 0.73), 0.12, seg(tb, 0.78, 0.92),
+      darkBg ? '#F2E3C2' : PAL.red);
   }
 
   /* ---- CENA: TIPOGRAFIA ---- */
@@ -602,20 +685,26 @@ class VoxRenderer {
     }
     const lh = fs * 1.24;
     const y0 = H * (this.vert ? 0.4 : 0.44) - (words.length - 1) * lh / 2;
+    // cada palavra vira um painel de papel colado (vermelho/amarelo/preto alternados)
+    const panelCols = scene.colorField === 'yellow'
+      ? [PAL.red, PAL.ink, PAL.white]
+      : scene.colorField === 'red'
+        ? [PAL.yellow, PAL.paper, PAL.ink]
+        : [PAL.red, PAL.yellow, PAL.ink];
     words.forEach((w, i) => {
       const t0 = 0.15 + i * 0.22;
       const a = easeOutBack(seg(tb, t0, t0 + 0.35));
       if (a <= 0) return;
       const y = y0 + i * lh;
       const tw = ctx.measureText(w).width;
-      // barra de destaque varre
-      const sweep = easeOutCubic(seg(tb, t0 - 0.06, t0 + 0.22));
-      ctx.fillStyle = i % 2 === 0 ? PAL.yellow : PAL.coral;
-      if (scene.colorField === 'yellow') ctx.fillStyle = i % 2 === 0 ? PAL.white : PAL.coral;
-      ctx.fillRect(W / 2 - tw / 2 - 12 * u, y - fs * 0.62, (tw + 24 * u) * sweep, fs * 1.18);
+      const pc = panelCols[i % panelCols.length];
       ctx.save();
-      ctx.translate(W / 2, y); ctx.scale(a, a);
-      ctx.fillStyle = fg === PAL.paper ? PAL.ink : PAL.ink;
+      ctx.translate(W / 2, y); ctx.rotate((i % 2 ? 1 : -1) * 0.014); ctx.scale(a, a);
+      ctx.shadowColor = 'rgba(0,0,0,.35)'; ctx.shadowBlur = 12 * u; ctx.shadowOffsetY = 7 * u;
+      tornRectPath(ctx, -tw / 2 - 18 * u, -fs * 0.64, tw + 36 * u, fs * 1.22, i * 53 + 11, 0.16);
+      ctx.fillStyle = pc; ctx.fill();
+      ctx.shadowColor = 'transparent';
+      ctx.fillStyle = (pc === PAL.yellow || pc === PAL.white || pc === PAL.paper) ? PAL.ink : PAL.paper;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(w, 0, 0);
       ctx.restore();
@@ -665,40 +754,62 @@ class VoxRenderer {
     }
   }
 
-  /* ---- CENA: ROTA ---- */
+  /* ---- CENA: MAPA MILITAR ANOTADO ---- */
   scene_route(blk, tb, p) {
     const { ctx, W, H, u } = this;
     const scene = blk.block.scene;
-    const y = H * (this.vert ? 0.42 : 0.46);
-    const ax = W * 0.2, bx2 = W * 0.8;
-    // continentes de papel rasgado
-    ctx.fillStyle = 'rgba(20,24,31,.09)';
-    this.blob(ax, y + H * 0.05, W * 0.24);
-    this.blob(bx2, y + H * 0.03, W * 0.2);
-    // rota tracejada desenhando
-    const prog = easeOutCubic(seg(tb, 0.35, 0.8));
-    const cpx = W / 2, cpy = y - H * 0.16;
-    ctx.strokeStyle = PAL.coral; ctx.lineWidth = 7 * u; ctx.setLineDash([18 * u, 14 * u]); ctx.lineCap = 'round';
+    const mw = W * 0.86, mh = H * (this.vert ? 0.44 : 0.56);
+    const mx = W / 2, my = H * (this.vert ? 0.4 : 0.44);
+    const enter = easeOutBack(seg(tb, 0.05, 0.4));
+    ctx.save();
+    ctx.translate(mx, my + (1 - enter) * H * 0.4); ctx.rotate(-0.015);
+    // folha de mapa rasgada
+    ctx.shadowColor = 'rgba(0,0,0,.4)'; ctx.shadowBlur = 22 * u; ctx.shadowOffsetY = 12 * u;
+    tornRectPath(ctx, -mw / 2, -mh / 2, mw, mh, blk.index * 19 + 4, 0.07);
+    ctx.fillStyle = '#F3EAD3'; ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.save();
+    tornRectPath(ctx, -mw / 2, -mh / 2, mw, mh, blk.index * 19 + 4, 0.07);
+    ctx.clip();
+    // grade quadriculada
+    ctx.strokeStyle = 'rgba(20,24,31,0.13)'; ctx.lineWidth = 1.5 * u;
+    for (let gx = -mw / 2; gx < mw / 2; gx += 46 * u) { ctx.beginPath(); ctx.moveTo(gx, -mh / 2); ctx.lineTo(gx, mh / 2); ctx.stroke(); }
+    for (let gy = -mh / 2; gy < mh / 2; gy += 46 * u) { ctx.beginPath(); ctx.moveTo(-mw / 2, gy); ctx.lineTo(mw / 2, gy); ctx.stroke(); }
+    // massas de terra
+    ctx.fillStyle = 'rgba(20,24,31,0.1)';
+    this.blob(-mw * 0.28, mh * 0.14, mw * 0.3);
+    this.blob(mw * 0.3, -mh * 0.1, mw * 0.26);
+    const ax = -mw * 0.3, ay = mh * 0.08, bx2 = mw * 0.3, by2 = -mh * 0.08;
+    // rota tracejada vermelha desenhando
+    const prog = easeOutCubic(seg(tb, 0.3, 0.72));
+    const cpx = 0, cpy = -mh * 0.34;
+    ctx.strokeStyle = PAL.red; ctx.lineWidth = 6.5 * u; ctx.setLineDash([16 * u, 13 * u]); ctx.lineCap = 'round';
     ctx.beginPath();
     for (let s = 0; s <= prog; s += 0.02) {
       const x = (1 - s) * (1 - s) * ax + 2 * (1 - s) * s * cpx + s * s * bx2;
-      const yy = (1 - s) * (1 - s) * y + 2 * (1 - s) * s * cpy + s * s * y;
+      const yy = (1 - s) * (1 - s) * ay + 2 * (1 - s) * s * cpy + s * s * by2;
       s === 0 ? ctx.moveTo(x, yy) : ctx.lineTo(x, yy);
     }
     ctx.stroke(); ctx.setLineDash([]);
-    // ponto viajante
-    if (prog > 0.02) {
-      const s = prog;
-      const x = (1 - s) * (1 - s) * ax + 2 * (1 - s) * s * cpx + s * s * bx2;
-      const yy = (1 - s) * (1 - s) * y + 2 * (1 - s) * s * cpy + s * s * y;
-      ctx.fillStyle = PAL.ink;
-      ctx.beginPath(); ctx.arc(x, yy, 12 * u, 0, 7); ctx.fill();
+    // círculo vermelho rabiscado no destino
+    this.markerEllipse(bx2, by2, mw * 0.13, mh * 0.11, seg(tb, 0.72, 0.92), PAL.red);
+    // setinhas de "movimento" azuis
+    const arrProg = seg(tb, 0.45, 0.8);
+    for (let i = 0; i < 3; i++) {
+      this.handArrow(ax + i * 30 * u, ay + mh * 0.22 + i * 14 * u, ax + mw * 0.22 + i * 30 * u, ay + mh * 0.1 + i * 12 * u,
+        seg(arrProg, i * 0.2, 0.6 + i * 0.2), PAL.navy);
     }
-    // pinos + etiquetas
-    const pa = easeOutBack(seg(tb, 0.1, 0.35));
-    const pb = easeOutBack(seg(tb, 0.75, 0.98));
-    if (pa > 0) { this.pin(ax, y, pa * 1.3 * u); this.routeLabel(scene.route.from, ax, y + 40 * u, pa); }
-    if (pb > 0) { this.pin(bx2, y, pb * 1.3 * u); this.routeLabel(scene.route.to, bx2, y + 40 * u, pb); }
+    ctx.restore();
+    // pinos + etiquetas (dentro do mapa)
+    const pa = easeOutBack(seg(tb, 0.18, 0.4));
+    const pb = easeOutBack(seg(tb, 0.72, 0.95));
+    if (pa > 0) { this.pin(ax, ay, pa * 1.3 * u); this.routeLabel(scene.route.from, ax, ay + 38 * u, pa); }
+    if (pb > 0) { this.pin(bx2, by2, pb * 1.3 * u); this.routeLabel(scene.route.to, bx2, by2 + 38 * u, pb); }
+    ctx.restore();
+    // camadas extra
+    const s2 = blk.block.scene;
+    if (s2.notes && s2.notes.length) this.notesCard(W * 0.26, H * (this.vert ? 0.69 : 0.74), W * 0.42, s2.notesTitle || 'RELATÓRIO', s2.notes.slice(0, 3), seg(tb, 0.55, 0.95), blk.index * 47 + 3);
+    if (s2.stamp) this.stamp(String(s2.stamp).toUpperCase().slice(0, 14), W * 0.74, H * (this.vert ? 0.7 : 0.74), 0.12, seg(tb, 0.8, 0.94));
   }
   blob(cx, cy, r) {
     const { ctx } = this;
