@@ -1034,7 +1034,11 @@ async function generate() {
       setProgress(20 + (pi / Math.max(1, photoBlocks.length)) * 22, `Imagem ${pi}/${photoBlocks.length}…`);
       const s = b.scene;
       let img = null;
-      if (useAI && s.imagePrompt) {
+      // foto própria do usuário (URL direta ou arquivo local do app)
+      if (s.imageUrl) {
+        try { img = await loadImg(s.imageUrl); } catch (e) { console.warn('imageUrl falhou', e); }
+      }
+      if (!img && useAI && s.imagePrompt) {
         try {
           const url = await gemImage(
             'Editorial mixed-media collage illustration, Vox documentary style: archival-photo look, muted colors, halftone texture, paper grain. ' +
