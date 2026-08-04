@@ -10,8 +10,8 @@ const PAL = {
   paper: '#F4EEE1', paper2: '#E9E0CC', yellow: '#FFD100', navy: '#12294B',
   coral: '#FF5A45', red: '#A6242B', ink: '#14181F', white: '#FFFFFF'
 };
-const FIELD_BG = { yellow: PAL.yellow, paper: PAL.paper, navy: PAL.navy, coral: PAL.coral, red: PAL.red };
-const FIELD_FG = { yellow: PAL.ink, paper: PAL.ink, navy: PAL.paper, coral: PAL.paper, red: PAL.paper };
+const FIELD_BG = { yellow: PAL.yellow, paper: PAL.paper, navy: PAL.navy, coral: PAL.coral, red: PAL.red, ink: '#1A1E24' };
+const FIELD_FG = { yellow: PAL.ink, paper: PAL.ink, navy: PAL.paper, coral: PAL.paper, red: PAL.paper, ink: PAL.paper };
 const GEM = 'https://generativelanguage.googleapis.com/v1beta/models/';
 const LS = 'voxlab_settings_v1';
 
@@ -626,7 +626,9 @@ class VoxRenderer {
       ctx.clip();
       const r = Math.max(iw / img.width, ih / img.height);
       const sw = iw / r, sh = ih / r;
-      ctx.filter = 'saturate(0.65) contrast(1.08) sepia(0.12)';
+      ctx.filter = (this.p.mono || blk.block.scene.mono)
+        ? 'grayscale(1) contrast(1.15) brightness(0.98)'
+        : 'saturate(0.65) contrast(1.08) sepia(0.12)';
       ctx.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, -iw / 2, -ih / 2, iw, ih);
       ctx.filter = 'none';
       // meio-tom por cima: aparência de impressão de jornal
@@ -1081,7 +1083,7 @@ async function generate() {
             voiceBuffers[i] = await actxTmp.decodeAudioData(await elevenTTS(line));
           } else {
             const { bytes, rate } = await gemTTS(
-              'Narre como documentarista, tom grave, calmo e envolvente, em português do Brasil: ' + line,
+              'Narre em português do Brasil, com voz masculina extremamente grave, profunda e calma, como narrador de documentário: ' + line,
               voice
             );
             voiceBuffers[i] = pcmToAudioBuffer(actxTmp, bytes, rate);
