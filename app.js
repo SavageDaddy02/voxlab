@@ -193,6 +193,16 @@ async function wikiImage(query) {
   return ok[0].thumburl || ok[0].url;
 }
 
+function loadVid(src) {
+  return new Promise((resolve, reject) => {
+    const v = document.createElement('video');
+    v.muted = true; v.loop = true; v.playsInline = true; v.preload = 'auto';
+    const to = setTimeout(() => reject(new Error('timeout video')), 30000);
+    v.onloadeddata = () => { clearTimeout(to); resolve(v); };
+    v.onerror = () => { clearTimeout(to); reject(new Error('erro video')); };
+    v.src = src;
+  });
+}
 function loadImg(src) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -915,12 +925,15 @@ class VoxRenderer {
     const { ctx, W, H } = this;
     const img = this.assets[blk.index];
     if (img) {
-      // Ken Burns: zoom lento com direção alternada + pan sutil
+      const isVid = img.tagName === 'VIDEO';
+      const iw0 = img.videoWidth || img.width, ih0 = img.videoHeight || img.height;
+      // Ken Burns: zoom lento com direção alternada + pan sutil (mais leve em vídeo, que já tem movimento próprio)
+      const amp = isVid ? 0.03 : 0.09;
       const zin = blk.index % 2 === 0;
-      const zoom = zin ? 1.03 + 0.09 * p : 1.12 - 0.09 * p;
-      const r = Math.max(W / img.width, H / img.height) * zoom;
-      const sw = img.width * r, sh = img.height * r;
-      const panX = (blk.index % 3 - 1) * (p - 0.5) * W * 0.04;
+      const zoom = zin ? 1.02 + amp * p : 1.02 + amp * (1 - p);
+      const r = Math.max(W / iw0, H / ih0) * zoom;
+      const sw = iw0 * r, sh = ih0 * r;
+      const panX = isVid ? 0 : (blk.index % 3 - 1) * (p - 0.5) * W * 0.04;
       ctx.drawImage(img, (W - sw) / 2 + panX, (H - sh) / 2, sw, sh);
       // grão de papel + leve dessaturação de topo
       ctx.globalAlpha = 0.55;
@@ -1101,6 +1114,11 @@ async function generate() {
       setProgress(20 + (pi / Math.max(1, photoBlocks.length)) * 22, `Imagem ${pi}/${photoBlocks.length}…`);
       const s = b.scene;
       const isIllu = s.type === 'illustration';
+      // clipe de vídeo pré-animado para a cena
+      if (s.videoUrl) {
+        try { assets[i] = await loadVid(s.videoUrl); continue; }
+        catch (e) { console.warn('videoUrl falhou', e); }
+      }
       let img = null;
       // foto própria do usuário (URL direta ou arquivo local do app)
       if (s.imageUrl && !isIllu) {
@@ -1201,6 +1219,8 @@ async function generate() {
     const cv = $('#stage');
     if (aspect === '9:16') { cv.width = 720; cv.height = 1280; } else { cv.width = 1280; cv.height = 720; }
     const renderer = new VoxRenderer(cv, project, timeline, assets);
+    // inicia os clipes de vídeo das cenas (loop, sem áudio)
+    Object.values(assets).forEach(a => { if (a && a.tagName === 'VIDEO') { a.currentTime = 0; a.play().catch(() => {}); } });
     renderer.draw(0);
 
     const actx = new (window.AudioContext || window.webkitAudioContext)();
