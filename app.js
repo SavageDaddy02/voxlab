@@ -125,15 +125,29 @@ async function gemTTS(text, voice) {
   return { bytes: b64ToBytes(part.inlineData.data), rate: m ? +m[1] : 24000 };
 }
 
-async function gemImage(prompt) {
+async function gemImage(prompt, aspect = '4:3', inputDataUrl = null) {
+  const parts = [{ text: prompt }];
+  if (inputDataUrl) {
+    const m = inputDataUrl.match(/^data:(image\/[\w+.-]+);base64,(.+)$/s);
+    if (m) parts.unshift({ inlineData: { mimeType: m[1], data: m[2] } });
+  }
   const body = {
-    contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: { imageConfig: { aspectRatio: '4:3' } }
+    contents: [{ parts }],
+    generationConfig: { imageConfig: { aspectRatio: aspect } }
   };
   const data = await gemCall('image', body);
   const part = (data.candidates?.[0]?.content?.parts || []).find(p => p.inlineData);
   if (!part) throw new Error('sem imagem');
   return 'data:' + part.inlineData.mimeType + ';base64,' + part.inlineData.data;
+}
+async function fileToDataUrl(url) {
+  const blob = await fetch(url).then(r => r.blob());
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result);
+    fr.onerror = rej;
+    fr.readAsDataURL(blob);
+  });
 }
 
 // ElevenLabs como voz reserva (free tier próprio, independente do Gemini)
@@ -453,18 +467,21 @@ class VoxRenderer {
     if (blk.kind === 'endcard') { this.endcard(tb, blk.dur); this.progressBar(t / total); return; }
 
     const scene = blk.block.scene;
-    // base: papel envelhecido SEMPRE — o "color field" é um painel de papel colado por cima
-    ctx.fillStyle = '#E9DFC8'; ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = ctx.createPattern(this.noise, 'repeat'); ctx.fillRect(0, 0, W, H);
-    const bg = FIELD_BG[scene.colorField];
-    this.paperPanel(W / 2, H / 2, W * 0.95, H * 0.95, 0.004 * (blk.index % 2 ? 1 : -1),
-      scene.colorField === 'paper' ? '#F6F0E2' : bg, blk.index * 7 + 3, 0.03);
-    // patch de halftone no canto
-    ctx.save();
-    ctx.globalAlpha = 0.85;
-    ctx.fillStyle = ctx.createPattern(scene.colorField === 'navy' ? this.htPaper : this.htInk, 'repeat');
-    ctx.beginPath(); ctx.arc(W * 0.9, H * 0.1, Math.min(W, H) * 0.26, 0, 7); ctx.fill();
-    ctx.restore();
+    const editorial = scene.type === 'illustration';
+    if (!editorial) {
+      // base: papel envelhecido SEMPRE — o "color field" é um painel de papel colado por cima
+      ctx.fillStyle = '#E9DFC8'; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = ctx.createPattern(this.noise, 'repeat'); ctx.fillRect(0, 0, W, H);
+      const bg = FIELD_BG[scene.colorField];
+      this.paperPanel(W / 2, H / 2, W * 0.95, H * 0.95, 0.004 * (blk.index % 2 ? 1 : -1),
+        scene.colorField === 'paper' ? '#F6F0E2' : bg, blk.index * 7 + 3, 0.03);
+      // patch de halftone no canto
+      ctx.save();
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = ctx.createPattern(scene.colorField === 'navy' ? this.htPaper : this.htInk, 'repeat');
+      ctx.beginPath(); ctx.arc(W * 0.9, H * 0.1, Math.min(W, H) * 0.26, 0, 7); ctx.fill();
+      ctx.restore();
+    }
 
     // "impact" de entrada do bloco + deriva contínua de câmera (nada fica parado)
     const imp = 1 + 0.05 * (1 - easeOutCubic(seg(tb, 0, 0.3)));
@@ -478,7 +495,7 @@ class VoxRenderer {
     ctx.restore();
 
     this.subtitles(blk, p);
-    this.labelChip(scene, tb);
+    if (!editorial) this.labelChip(scene, tb);
     // vinheta cinematográfica
     const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.45, W / 2, H / 2, Math.max(W, H) * 0.72);
     vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(35,22,8,0.2)');
@@ -528,6 +545,25 @@ class VoxRenderer {
     let cur = -1;
     for (let i = 0; i < words.length; i++) if (p >= lead + blk._wt[i] * span) cur = i;
     if (cur < 0) cur = 0;
+    // modo editorial: legenda minúscula e discreta, como na referência
+    if (blk.block.scene.type === 'illustration') {
+      const per2 = 3;
+      const li2 = Math.floor(cur / per2);
+      const txt = words.slice(li2 * per2, li2 * per2 + per2).join(' ').toUpperCase().replace(/[.,;:!?]/g, '');
+      const fs2 = 15 * u;
+      ctx.font = this.font(fs2);
+      const tw2 = ctx.measureText(txt).width;
+      ctx.save();
+      ctx.translate(W / 2, H * (this.vert ? 0.88 : 0.9));
+      ctx.fillStyle = 'rgba(251,246,234,0.95)';
+      ctx.shadowColor = 'rgba(0,0,0,.25)'; ctx.shadowBlur = 6 * u; ctx.shadowOffsetY = 3 * u;
+      ctx.fillRect(-tw2 / 2 - 10 * u, -fs2 * 0.85, tw2 + 20 * u, fs2 * 1.7);
+      ctx.shadowColor = 'transparent';
+      ctx.fillStyle = PAL.ink; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(txt, 0, 0);
+      ctx.restore();
+      return;
+    }
     const per = 6;
     const li = Math.floor(cur / per);
     const lineWords = words.slice(li * per, li * per + per);
@@ -874,6 +910,32 @@ class VoxRenderer {
     }
   }
 
+  /* ---- CENA: ILUSTRAÇÃO EDITORIAL (tela cheia + Ken Burns) ---- */
+  scene_illustration(blk, tb, p) {
+    const { ctx, W, H } = this;
+    const img = this.assets[blk.index];
+    if (img) {
+      // Ken Burns: zoom lento com direção alternada + pan sutil
+      const zin = blk.index % 2 === 0;
+      const zoom = zin ? 1.03 + 0.09 * p : 1.12 - 0.09 * p;
+      const r = Math.max(W / img.width, H / img.height) * zoom;
+      const sw = img.width * r, sh = img.height * r;
+      const panX = (blk.index % 3 - 1) * (p - 0.5) * W * 0.04;
+      ctx.drawImage(img, (W - sw) / 2 + panX, (H - sh) / 2, sw, sh);
+      // grão de papel + leve dessaturação de topo
+      ctx.globalAlpha = 0.55;
+      ctx.fillStyle = ctx.createPattern(this.noise, 'repeat');
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalAlpha = 1;
+    } else {
+      ctx.fillStyle = '#EFE6D3'; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = ctx.createPattern(this.noise, 'repeat'); ctx.fillRect(0, 0, W, H);
+    }
+    // círculo vermelho de destaque (motivo visual da série)
+    const c = blk.block.scene.circle;
+    if (c) this.markerEllipse(W * c.x, H * c.y, W * c.rx, H * (c.ry || c.rx * (W / H)), seg(p, 0.45, 0.75), PAL.red);
+  }
+
   /* ---- ENDCARD ---- */
   endcard(tb, dur) {
     const { ctx, W, H, u } = this;
@@ -1031,22 +1093,30 @@ async function generate() {
     /* 3 — imagens */
     setPhase('images');
     const assets = {};
-    const photoBlocks = project.blocks.map((b, i) => ({ b, i })).filter(x => x.b.scene.type === 'photo');
+    const photoBlocks = project.blocks.map((b, i) => ({ b, i }))
+      .filter(x => x.b.scene.type === 'photo' || x.b.scene.type === 'illustration');
     let pi = 0;
     for (const { b, i } of photoBlocks) {
       pi++;
       setProgress(20 + (pi / Math.max(1, photoBlocks.length)) * 22, `Imagem ${pi}/${photoBlocks.length}…`);
       const s = b.scene;
+      const isIllu = s.type === 'illustration';
       let img = null;
       // foto própria do usuário (URL direta ou arquivo local do app)
-      if (s.imageUrl) {
+      if (s.imageUrl && !isIllu) {
         try { img = await loadImg(s.imageUrl); } catch (e) { console.warn('imageUrl falhou', e); }
       }
-      if (!img && useAI && s.imagePrompt) {
+      if (!img && (useAI || isIllu) && s.imagePrompt) {
         try {
+          let ref = null;
+          if (s.refImage) { try { ref = await fileToDataUrl(s.refImage); } catch {} }
+          const stylePrefix = isIllu
+            ? 'Editorial paper-collage illustration on a warm cream paper background: flat muted colors, paper-cutout characters and objects with subtle drop shadows, ONE deep crimson red accent element, occasional black-and-white halftone photographic collage elements mixed in, fine paper grain, minimalist composition with generous empty space. '
+            : 'Editorial mixed-media collage illustration, Vox documentary style: archival-photo look, muted colors, halftone texture, paper grain. ';
           const url = await gemImage(
-            'Editorial mixed-media collage illustration, Vox documentary style: archival-photo look, muted colors, halftone texture, paper grain. ' +
-            s.imagePrompt + '. No text, no letters, no words, no watermark.'
+            stylePrefix + s.imagePrompt + '. No text, no letters, no words, no watermark.',
+            isIllu ? aspect : '4:3',
+            ref
           );
           img = await loadImg(url);
         } catch (e) { console.warn('img IA falhou', e); }
@@ -1054,6 +1124,9 @@ async function generate() {
       if (!img && s.imageQuery) {
         try { img = await loadImg(await wikiImage(s.imageQuery)); }
         catch { if (s.imageQueryAlt) { try { img = await loadImg(await wikiImage(s.imageQueryAlt)); } catch {} } }
+      }
+      if (!img && s.imageUrl) {
+        try { img = await loadImg(s.imageUrl); } catch {}
       }
       assets[i] = img; // null → placeholder
     }
