@@ -927,14 +927,25 @@ class VoxRenderer {
     if (img) {
       const isVid = img.tagName === 'VIDEO';
       const iw0 = img.videoWidth || img.width, ih0 = img.videoHeight || img.height;
-      // Ken Burns: zoom lento com direção alternada + pan sutil (mais leve em vídeo, que já tem movimento próprio)
-      const amp = isVid ? 0.03 : 0.09;
+      // DOIS enquadramentos por cena com corte seco (ritmo documental):
+      // plano aberto (0–55%) → corte → detalhe com push-in (55–100%)
+      const cut = 0.55;
+      const shot2 = !isVid && p >= cut;
+      const pp = shot2 ? (p - cut) / (1 - cut) : p / cut;
+      const amp = isVid ? 0.03 : 0.07;
       const zin = blk.index % 2 === 0;
-      const zoom = zin ? 1.02 + amp * p : 1.02 + amp * (1 - p);
+      let zoom = zin ? 1.02 + amp * pp : 1.02 + amp * (1 - pp);
+      let fx = 0, fy = 0;
+      if (shot2) {
+        zoom *= 1.42; // plano detalhe
+        const quad = blk.index % 4;
+        fx = (quad % 2 ? 1 : -1) * W * 0.13;
+        fy = (quad < 2 ? -1 : 1) * H * 0.09;
+      }
       const r = Math.max(W / iw0, H / ih0) * zoom;
       const sw = iw0 * r, sh = ih0 * r;
-      const panX = isVid ? 0 : (blk.index % 3 - 1) * (p - 0.5) * W * 0.04;
-      ctx.drawImage(img, (W - sw) / 2 + panX, (H - sh) / 2, sw, sh);
+      const panX = isVid ? 0 : (blk.index % 3 - 1) * (pp - 0.5) * W * 0.03;
+      ctx.drawImage(img, (W - sw) / 2 + panX + fx, (H - sh) / 2 + fy, sw, sh);
       // grão de papel + leve dessaturação de topo
       ctx.globalAlpha = 0.55;
       ctx.fillStyle = ctx.createPattern(this.noise, 'repeat');
